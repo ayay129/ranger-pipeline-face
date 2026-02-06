@@ -1,10 +1,13 @@
 from ais_bench.infer.interface import InferSession
 import time
 import os
+import logging
 from typing import List, Tuple
 
 import cv2
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 class FaceModelAISBench:
     def __init__(self, models_dir: str = None):
@@ -19,14 +22,14 @@ class FaceModelAISBench:
         self.rec_sess = self._try_load(base_dir, ["w600k_r50.om", "rec.om"])
         self.attr_sess = self._try_load(base_dir, ["genderage.om", "attr.om"])
         if self.rec_sess is not None:
-            print(f"[AISBench] recognition OM loaded on device {self.device_id}")
+            logger.info("AISBench recognition OM loaded on device %s", self.device_id)
         else:
-            print("[AISBench] recognition OM not found, will fallback")
+            logger.warning("AISBench recognition OM not found, will fallback")
         if self.attr_sess is not None:
-            print(f"[AISBench] attribute OM loaded on device {self.device_id}")
+            logger.info("AISBench attribute OM loaded on device %s", self.device_id)
         else:
-            print("[AISBench] attribute OM not found, will fallback")
-        print(f"Initialization completed in {time.time() - start:.2f} seconds")
+            logger.warning("AISBench attribute OM not found, will fallback")
+        logger.info("Initialization completed in %.2f seconds", time.time() - start)
 
     def _ordered_outputs(self, outs, sess):
         if isinstance(outs, dict):
@@ -54,6 +57,14 @@ class FaceModelAISBench:
             return default
         return h, w
 
+    def _infer(self, sess: InferSession, inputs: List[np.ndarray], tag: str = None):
+        start = time.perf_counter()
+        outs = sess.infer(inputs)
+        cost_ms = (time.perf_counter() - start) * 1000.0
+        if tag:
+            logger.info("%s infer: %.2f ms", tag, cost_ms)
+        return outs
+
     def _try_load(self, base_dir: str, names: List[str]):
         paths = []
         for root, _, files in os.walk(base_dir):
@@ -67,9 +78,9 @@ class FaceModelAISBench:
             try:
                 in_shape = sess.get_inputs()[0].shape
                 out_shape = sess.get_outputs()[0].shape
-                print(f"[AISBench] loaded {os.path.basename(paths[0])}CPUExecutionProvider input={in_shape} output={out_shape}")
+                logger.info("AISBench loaded %s input=%s output=%s", os.path.basename(paths[0]), in_shape, out_shape)
             except Exception:
-                print(f"[AISBench] loaded {os.path.basename(paths[0])}")
+                logger.info("AISBench loaded %s", os.path.basename(paths[0]))
             return sess
         except Exception:
             return None
@@ -247,7 +258,7 @@ class FaceModelAISBench:
         if self.det_sess is None:
             raise RuntimeError("det_10g.om not loaded")
         inp, scale, det_shape = self._preprocess_det(img)
-        outs = self.det_sess.infer([inp])
+        outs = self._infer(self.det_sess, [inp], tag="det")
         arrs = self._ordered_outputs(outs, self.det_sess)
         dets = self._postprocess_det(arrs, det_shape, scale)
         if not dets:
@@ -270,7 +281,7 @@ class FaceModelAISBench:
             if self.kps_sess is not None:
                 if crop.size != 0:
                     kinp, kshape = self._preprocess_kps(crop)
-                    kouts = self.kps_sess.infer([kinp])
+                    kouts = self._infer(self.kps_sess, [kinp], tag="kps")
                     karrs = self._ordered_outputs(kouts, self.kps_sess)
                     pts106 = self._postprocess_kps(karrs, kshape[1], kshape[0])
                     cw = max(1, x2 - x1)
@@ -318,9 +329,9 @@ class FaceModelAISBench:
             emb = aligned_face.astype(np.float32).flatten()
             n = np.linalg.norm(emb) + 1e-6
             return emb / n
-        print(f"[AISBench] infer recognition on device {self.device_id}")
+        logger.info("AISBench recognition infer on device %s", self.device_id)
         inp = self._preprocess_rec(aligned_face)
-        outs = self.rec_sess.infer([inp])
+        outs = self._infer(self.rec_sess, [inp], tag="rec")
         arrs = self._ordered_outputs(outs, self.rec_sess)
         feat = arrs[0]
         if feat.ndim > 2:
@@ -332,9 +343,9 @@ class FaceModelAISBench:
     def get_gender_age_race(self, aligned_face: np.ndarray):
         if self.attr_sess is None or not self.face_attributes or self.face_index >= len(self.face_attributes):
             return "Unknown", 0, "Unknown"
-        print(f"[AISBench] infer attributes on device {self.device_id}")
+        logger.info("AISBench attribute infer on device %s", self.device_id)
         inp = self._preprocess_attr(aligned_face)
-        outs = self.attr_sess.infer([inp])
+        outs = self._infer(self.attr_sess, [inp], tag="attr")
         arrs = self._ordered_outputs(outs, self.attr_sess)
         gender = "Unknown"
         age = 0
