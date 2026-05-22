@@ -3,3 +3,7 @@ models/**
 *.pt
 *.bin
 !models/.gitkeep
+algo-cv-pipeline-face-buffalo-l/
+test/
+repots/
+*.jpeg

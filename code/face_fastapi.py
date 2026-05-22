@@ -13,7 +13,14 @@ from fastapi.responses import JSONResponse, HTMLResponse
 import uvicorn
 import logging 
 from face_model import FaceModelONNX
-from face_ais_bench import FaceModelAISBench
+
+try:
+    from face_ais_bench import FaceModelAISBench
+except Exception as exc:
+    FaceModelAISBench = None
+    AIS_BENCH_IMPORT_ERROR = exc
+else:
+    AIS_BENCH_IMPORT_ERROR = None
 
 # Configure logging
 logging.basicConfig(
@@ -40,11 +47,13 @@ async def startup_event():
     try:
         logger.info("Model type: %s", model_type)
         if model_type=="om":
+            if FaceModelAISBench is None:
+                raise RuntimeError(f"ais_bench is not available: {AIS_BENCH_IMPORT_ERROR}")
             model = FaceModelAISBench()
         else:
             model = FaceModelONNX()
         #model = FaceModel()
-        logger.info(f"Finish loading face model. model type:{model_type}")
+        logger.info(f"Finish loading face model. model type:{model}")
     except Exception as e:
         logger.error(f"Failed to initialize model: {e}")
         print("\n" + "="*60)

@@ -154,14 +154,37 @@ git push -u origin main
 
 ## Docker（可选）
 
-基础镜像构建（CPU 示例）：
+NVIDIA CUDA 镜像构建：
 
 ```bash
-docker build -t algo-cv-face:cpu -f Dockerfile .
-docker run --rm -p 8112:8112 algo-cv-face:cpu
+docker build -t algo-cv-face:cuda -f Dockerfile .
+docker run --rm --gpus all -p 8112:8000 algo-cv-face:cuda
 ```
 
-CUDA/ONNXRuntime GPU 示例请参考 `Dockerfile.cuda.py310`，并确保宿主机有合适的 NVIDIA 驱动与 Docker GPU 运行时。
+确保宿主机有合适的 NVIDIA 驱动与 Docker GPU 运行时。`Dockerfile.cuda.py310` 仅保留为 CUDA/Python
+基础镜像示例。
+
+### NVIDIA CUDA 推理配置
+
+当前 `Dockerfile` 使用 CUDA 12 + cuDNN 9，对应 `onnxruntime-gpu==1.20.1`。不要在同一个镜像里混用
+`onnxruntime-gpu==1.16.x` 和 cuDNN 9；1.16.x 属于 CUDA 11.8/cuDNN 8 组合。
+
+检测模型在部分 NVIDIA 环境中可能触发 ONNX Runtime 生成的 `FusedConv` CUDA kernel 报
+`CUDNN_STATUS_EXECUTION_FAILED`。默认配置已采用更稳的 CUDA Provider 设置：
+
+```bash
+ORT_GRAPH_OPT_LEVEL=ORT_ENABLE_BASIC
+ORT_CUDNN_CONV_ALGO_SEARCH=DEFAULT
+ORT_CUDNN_CONV_USE_MAX_WORKSPACE=0
+```
+
+如果目标机器验证稳定且需要压测性能，可以再按需调回：
+
+```bash
+ORT_GRAPH_OPT_LEVEL=ORT_ENABLE_ALL
+ORT_CUDNN_CONV_ALGO_SEARCH=EXHAUSTIVE
+ORT_CUDNN_CONV_USE_MAX_WORKSPACE=1
+```
 
 ## 测试
 

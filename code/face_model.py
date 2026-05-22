@@ -15,7 +15,10 @@ import cv2
 import numpy as np
 import onnxruntime as ort
 
-from face_ais_bench import FaceModelAISBench
+try:
+    from face_ais_bench import FaceModelAISBench
+except Exception:
+    FaceModelAISBench = None
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +32,7 @@ class FaceModelONNX:
         self.race_labels = ["Asian", "White", "Black", "Indian", "Other"]
         self.face_attributes = []
         self.face_index = 0
+        self.session_options = self._build_session_options()
         self.providers = self._resolve_providers(providers)
 
         base_dir = Path(models_dir) if models_dir else self._default_models_dir()
@@ -42,6 +46,7 @@ class FaceModelONNX:
         self.attr_sess = self._load_session(base_dir / "genderage.onnx")
 
         logger.info("ONNX providers: %s", self.providers)
+        logger.info("ONNX graph optimization: %s", os.environ.get("ORT_GRAPH_OPT_LEVEL", "ORT_ENABLE_BASIC"))
         logger.info("Initialization completed in %.2f seconds", time.time() - start_time)
 
     def _default_models_dir(self) -> Path:
@@ -54,9 +59,54 @@ class FaceModelONNX:
         if providers:
             return providers
         available = ort.get_available_providers()
+        logger.info("Available ONNX providers: %s", available)
+        if os.environ.get("ORT_FORCE_CPU", "").lower() in ("1", "true", "yes"):
+            return ["CPUExecutionProvider"]
         if "CUDAExecutionProvider" in available:
-            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            return [("CUDAExecutionProvider", self._cuda_provider_options()), "CPUExecutionProvider"]
         return ["CPUExecutionProvider"]
+
+    def _build_session_options(self):
+        sess_options = ort.SessionOptions()
+        graph_level = os.environ.get("ORT_GRAPH_OPT_LEVEL", "ORT_ENABLE_BASIC").upper()
+        graph_levels = {
+            "ORT_DISABLE_ALL": ort.GraphOptimizationLevel.ORT_DISABLE_ALL,
+            "DISABLE": ort.GraphOptimizationLevel.ORT_DISABLE_ALL,
+            "ORT_ENABLE_BASIC": ort.GraphOptimizationLevel.ORT_ENABLE_BASIC,
+            "BASIC": ort.GraphOptimizationLevel.ORT_ENABLE_BASIC,
+            "ORT_ENABLE_EXTENDED": ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED,
+            "EXTENDED": ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED,
+            "ORT_ENABLE_ALL": ort.GraphOptimizationLevel.ORT_ENABLE_ALL,
+            "ALL": ort.GraphOptimizationLevel.ORT_ENABLE_ALL,
+        }
+        if graph_level not in graph_levels:
+            logger.warning("Invalid ORT_GRAPH_OPT_LEVEL=%s, using ORT_ENABLE_BASIC", graph_level)
+            graph_level = "ORT_ENABLE_BASIC"
+        sess_options.graph_optimization_level = graph_levels[graph_level]
+
+        intra_threads = os.environ.get("ORT_INTRA_OP_NUM_THREADS")
+        inter_threads = os.environ.get("ORT_INTER_OP_NUM_THREADS")
+        if intra_threads:
+            sess_options.intra_op_num_threads = int(intra_threads)
+        if inter_threads:
+            sess_options.inter_op_num_threads = int(inter_threads)
+        return sess_options
+
+    def _cuda_provider_options(self):
+        options = {
+            "device_id": os.environ.get("ORT_CUDA_DEVICE_ID", "0"),
+            "arena_extend_strategy": os.environ.get("ORT_ARENA_EXTEND_STRATEGY", "kSameAsRequested"),
+            "cudnn_conv_algo_search": os.environ.get("ORT_CUDNN_CONV_ALGO_SEARCH", "DEFAULT"),
+            "cudnn_conv_use_max_workspace": os.environ.get("ORT_CUDNN_CONV_USE_MAX_WORKSPACE", "0"),
+            "do_copy_in_default_stream": os.environ.get("ORT_DO_COPY_IN_DEFAULT_STREAM", "1"),
+        }
+        gpu_mem_limit = os.environ.get("ORT_GPU_MEM_LIMIT")
+        if gpu_mem_limit:
+            options["gpu_mem_limit"] = gpu_mem_limit
+        use_tf32 = os.environ.get("ORT_USE_TF32")
+        if use_tf32 is not None:
+            options["use_tf32"] = use_tf32
+        return options
 
     def _load_session(self, model_path: Path, required: bool = False):
         if not model_path.exists():
@@ -64,7 +114,7 @@ class FaceModelONNX:
                 raise FileNotFoundError(f"model not found: {model_path}")
             logger.warning("Model not found: %s", model_path)
             return None
-        sess = ort.InferenceSession(str(model_path), providers=self.providers)
+        sess = ort.InferenceSession(str(model_path), sess_options=self.session_options, providers=self.providers)
         logger.info("Loaded model: %s", model_path.name)
         return sess
 
@@ -169,13 +219,20 @@ class FaceModelONNX:
         x = np.expand_dims(x, 0)
         return x, (scale, scale), (h, w)
 
-    def _decode_scrfd(self, scores: np.ndarray, bboxes: np.ndarray, stride: int, det_shape: Tuple[int, int]):
+    def _decode_scrfd(
+        self,
+        scores: np.ndarray,
+        bboxes: np.ndarray,
+        stride: int,
+        det_shape: Tuple[int, int],
+        keypoints: np.ndarray = None,
+    ):
         det_h, det_w = det_shape
         feat_h = int(det_h / stride)
         feat_w = int(det_w / stride)
         anchor_num = int(bboxes.shape[0] / (feat_h * feat_w))
         if anchor_num < 1:
-            return np.zeros((0, 4), dtype=np.float32), np.zeros((0,), dtype=np.float32)
+            return np.zeros((0, 4), dtype=np.float32), np.zeros((0,), dtype=np.float32), None
         xs = np.arange(feat_w)
         ys = np.arange(feat_h)
         xs, ys = np.meshgrid(xs, ys)
@@ -184,24 +241,33 @@ class FaceModelONNX:
         if anchor_num > 1:
             centers = np.repeat(centers, anchor_num, axis=0)
         scores = scores.reshape(-1).astype(np.float32)
-        if scores.size != centers.shape[0]:
-            size = min(scores.size, centers.shape[0])
-            scores = scores[:size]
-            bboxes = bboxes[:size]
-            centers = centers[:size]
+        size = min(scores.size, bboxes.shape[0], centers.shape[0])
+        if keypoints is not None:
+            size = min(size, keypoints.shape[0])
+        scores = scores[:size]
+        bboxes = bboxes[:size]
+        centers = centers[:size]
         bboxes = bboxes.astype(np.float32) * stride
         x1 = centers[:, 0] - bboxes[:, 0]
         y1 = centers[:, 1] - bboxes[:, 1]
         x2 = centers[:, 0] + bboxes[:, 2]
         y2 = centers[:, 1] + bboxes[:, 3]
         boxes = np.stack([x1, y1, x2, y2], axis=1)
+        points = None
+        if keypoints is not None:
+            keypoints = keypoints[:size].astype(np.float32) * stride
+            points = np.empty((size, 5, 2), dtype=np.float32)
+            for idx in range(5):
+                points[:, idx, 0] = centers[:, 0] + keypoints[:, idx * 2]
+                points[:, idx, 1] = centers[:, 1] + keypoints[:, idx * 2 + 1]
         if scores.size and (scores.max() > 1.0 or scores.min() < 0.0):
             scores = 1.0 / (1.0 + np.exp(-scores))
-        return boxes, scores
+        return boxes, scores, points
 
-    def _postprocess_det(self, outs: List[np.ndarray], det_shape: Tuple[int, int], scale: Tuple[float, float]) -> List[List[float]]:
+    def _postprocess_det(self, outs: List[np.ndarray], det_shape: Tuple[int, int], scale: Tuple[float, float]) -> List[dict]:
         scores_list = []
         bbox_list = []
+        keypoint_list = []
         for o in outs:
             a = o
             if a.ndim == 3 and a.shape[0] == 1:
@@ -210,16 +276,21 @@ class FaceModelONNX:
                 scores_list.append(a)
             elif a.ndim == 2 and a.shape[-1] == 4:
                 bbox_list.append(a)
+            elif a.ndim == 2 and a.shape[-1] == 10:
+                keypoint_list.append(a)
         if not scores_list or not bbox_list:
             return []
         scores_list = sorted(scores_list, key=lambda x: x.shape[0], reverse=True)
         bbox_list = sorted(bbox_list, key=lambda x: x.shape[0], reverse=True)
+        keypoint_list = sorted(keypoint_list, key=lambda x: x.shape[0], reverse=True)
         strides = [8, 16, 32]
         all_boxes = []
         all_scores = []
+        all_keypoints = []
         for idx, (scores, bboxes) in enumerate(zip(scores_list, bbox_list)):
             stride = strides[idx] if idx < len(strides) else strides[-1]
-            boxes, scr = self._decode_scrfd(scores, bboxes, stride, det_shape)
+            keypoints = keypoint_list[idx] if idx < len(keypoint_list) else None
+            boxes, scr, points = self._decode_scrfd(scores, bboxes, stride, det_shape, keypoints)
             if boxes.size == 0:
                 continue
             score_thr = float(os.environ.get("DET_SCORE_THRESH", "0.5"))
@@ -228,18 +299,31 @@ class FaceModelONNX:
                 continue
             all_boxes.append(boxes[mask])
             all_scores.append(scr[mask])
+            if points is not None:
+                all_keypoints.append(points[mask])
         if not all_boxes:
             return []
         b = np.concatenate(all_boxes, axis=0)
         s = np.concatenate(all_scores, axis=0)
+        k = np.concatenate(all_keypoints, axis=0) if len(all_keypoints) == len(all_boxes) else None
         b[:, [0, 2]] = b[:, [0, 2]] * (1.0 / scale[0])
         b[:, [1, 3]] = b[:, [1, 3]] * (1.0 / scale[1])
+        if k is not None:
+            k[:, :, 0] = k[:, :, 0] * (1.0 / scale[0])
+            k[:, :, 1] = k[:, :, 1] * (1.0 / scale[1])
         keep = self._nms(b, s, float(os.environ.get("DET_NMS_IOU", "0.5")), int(os.environ.get("DET_TOPK", "100")))
         res = []
         for i in keep:
             x1, y1, x2, y2 = b[i].tolist()
-            res.append([x1, y1, x2, y2, float(s[i])])
+            item = {"bbox": [x1, y1, x2, y2, float(s[i])]}
+            if k is not None:
+                item["kps"] = k[i].astype(np.float32)
+            res.append(item)
         return res
+
+    def _format_pts5_for_response(self, kps: np.ndarray) -> List[float]:
+        selected = [kps[2], kps[0], kps[1], kps[3], kps[4]]
+        return [float(c) for p in selected for c in p]
 
     def _preprocess_kps(self, face: np.ndarray) -> Tuple[np.ndarray, Tuple[int, int]]:
         h, w = self._get_input_hw(self.kps_sess, "KPS_INPUT_SHAPE", default=(192, 192))
@@ -275,12 +359,13 @@ class FaceModelONNX:
             self.face_attributes = []
             self.face_index = 0
             return 0, np.array([]), np.array([]), np.array([])
-        bboxes = dets
+        bboxes = [d["bbox"] for d in dets]
         pts5 = []
         aligned = []
         self.face_attributes = []
         self.face_index = 0
-        for bb in bboxes:
+        for det in dets:
+            bb = det["bbox"]
             x1, y1, x2, y2, _ = bb
             x1 = max(0, int(x1))
             y1 = max(0, int(y1))
@@ -288,7 +373,11 @@ class FaceModelONNX:
             y2 = min(img.shape[0], int(y2))
             crop = img[y1:y2, x1:x2]
             aligned_face = None
-            if self.kps_sess is not None and crop.size != 0:
+            det_kps = det.get("kps")
+            if det_kps is not None and det_kps.shape == (5, 2):
+                aligned_face = self._align_face(img, det_kps)
+                pts5.append(self._format_pts5_for_response(det_kps))
+            elif self.kps_sess is not None and crop.size != 0:
                 kinp, kshape = self._preprocess_kps(crop)
                 kouts = self._infer(self.kps_sess, kinp, tag="kps")
                 pts106 = self._postprocess_kps(kouts, kshape[1], kshape[0])
@@ -393,5 +482,6 @@ class FaceModelONNX:
         return results
 
 
-__all__ = ["FaceModelONNX", "FaceModelAISBench"]
-
+__all__ = ["FaceModelONNX"]
+if FaceModelAISBench is not None:
+    __all__.append("FaceModelAISBench")
