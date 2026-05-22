@@ -96,7 +96,8 @@ async def process_image(
     file: UploadFile = File(...),
     gender: str = Form(None),
     age: str = Form(None),
-    race: str = Form(None)
+    race: str = Form(None),
+    face_select: str = Form("area")
 ):
     """Process uploaded image and return face recognition results"""
     total_time_start = time.time()
@@ -133,7 +134,11 @@ async def process_image(
     gender_flag = gender == '1'
     age_flag = age == '1'
     race_flag = race == '1'
-    logger.info("Flags gender=%s age=%s race=%s", gender_flag, age_flag, race_flag)
+    face_select = (face_select or "area").lower()
+    if face_select not in ("area", "score", "first"):
+        logger.warning("Invalid face_select=%s, fallback to area", face_select)
+        face_select = "area"
+    logger.info("Flags gender=%s age=%s race=%s face_select=%s", gender_flag, age_flag, race_flag, face_select)
     face_info = []
 
     # Detect faces
@@ -219,6 +224,20 @@ async def process_image(
             person_info["age"] = str(ages[i]) if i < len(ages) else str(0)
 
         face_info.append(person_info)
+
+    if face_select != "first":
+        def face_area(face):
+            bb = face.get("bboxes") or []
+            if len(bb) < 4:
+                return 0.0
+            return max(0.0, float(bb[2]) - float(bb[0])) * max(0.0, float(bb[3]) - float(bb[1]))
+
+        def face_score(face):
+            bb = face.get("bboxes") or []
+            return float(bb[4]) if len(bb) > 4 else 0.0
+
+        key_func = face_area if face_select == "area" else face_score
+        face_info.sort(key=key_func, reverse=True)
 
     # Log performance metrics
     total_time_end = time.time()
