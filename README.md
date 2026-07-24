@@ -186,6 +186,21 @@ ORT_CUDNN_CONV_ALGO_SEARCH=EXHAUSTIVE
 ORT_CUDNN_CONV_USE_MAX_WORKSPACE=1
 ```
 
+### 大脸检测回退
+
+检测默认先保持图片内容的原始比例并放入模型画布。第一次未检出时，会将图片内容缩小到
+`320×320` 范围内、保持模型画布尺寸不变并重试，以覆盖脸部占画面比例过大的情况。
+
+回退默认开启，可以通过环境变量调整或关闭：
+
+```bash
+DET_FALLBACK_ENABLED=1
+DET_FALLBACK_CONTENT_SIZE=320
+
+# 关闭回退
+DET_FALLBACK_ENABLED=0
+```
+
 ## 测试
 
 ```bash

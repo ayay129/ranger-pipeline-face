@@ -142,10 +142,21 @@ class FaceModelAISBench:
             idxs = idxs[1:][iou <= iou_thr]
         return keep
 
-    def _preprocess_det(self, img: np.ndarray) -> Tuple[np.ndarray, Tuple[float, float], Tuple[int, int]]:
+    def _preprocess_det(
+        self,
+        img: np.ndarray,
+        max_content_size: int = None,
+    ) -> Tuple[np.ndarray, Tuple[float, float], Tuple[int, int]]:
         h, w = self._get_input_hw(self.det_sess, "DET_INPUT_SHAPE", default=(640, 640))
         ih, iw = img.shape[0], img.shape[1]
-        scale = min(w / iw, h / ih)
+        content_h, content_w = h, w
+        if max_content_size is not None:
+            content_h = min(content_h, max_content_size)
+            content_w = min(content_w, max_content_size)
+        # Upscaling a small image can make an already-large face exceed the
+        # scale range on which SCRFD is reliable. Keep the original resolution
+        # and only downscale images that do not fit the detector canvas.
+        scale = min(1.0, content_w / iw, content_h / ih)
         nw = int(iw * scale)
         nh = int(ih * scale)
         x = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -153,10 +164,23 @@ class FaceModelAISBench:
         pad = np.zeros((h, w, 3), dtype=np.float32)
         pad[:nh, :nw] = x
         x = pad
-        x = x.astype(np.float32) / 255.0
+        # det_10g (SCRFD) uses the same normalization as InsightFace:
+        # cv2.dnn.blobFromImage(..., scalefactor=1/128, mean=127.5).
+        x = (x.astype(np.float32) - 127.5) / 128.0
         x = np.transpose(x, (2, 0, 1))
         x = np.expand_dims(x, 0)
         return x, (scale, scale), (h, w)
+
+    def _det_fallback_content_size(self) -> int:
+        enabled = os.environ.get("DET_FALLBACK_ENABLED", "1").lower() not in ("0", "false", "no", "off")
+        if not enabled:
+            return 0
+        try:
+            size = int(os.environ.get("DET_FALLBACK_CONTENT_SIZE", "320"))
+        except ValueError:
+            logger.warning("Invalid DET_FALLBACK_CONTENT_SIZE, fallback detection is disabled")
+            return 0
+        return max(0, size)
 
     def _decode_scrfd(self, scores: np.ndarray, bboxes: np.ndarray, stride: int, det_shape: Tuple[int, int]):
         det_h, det_w = det_shape
@@ -261,6 +285,20 @@ class FaceModelAISBench:
         outs = self._infer(self.det_sess, [inp], tag="det")
         arrs = self._ordered_outputs(outs, self.det_sess)
         dets = self._postprocess_det(arrs, det_shape, scale)
+        fallback_size = self._det_fallback_content_size()
+        if not dets and fallback_size > 0:
+            fallback_inp, fallback_scale, fallback_shape = self._preprocess_det(
+                img,
+                max_content_size=fallback_size,
+            )
+            if fallback_scale != scale:
+                logger.info(
+                    "No face detected at the original content scale; retrying with max content size %s",
+                    fallback_size,
+                )
+                fallback_outs = self._infer(self.det_sess, [fallback_inp], tag="det_fallback")
+                fallback_arrs = self._ordered_outputs(fallback_outs, self.det_sess)
+                dets = self._postprocess_det(fallback_arrs, fallback_shape, fallback_scale)
         if not dets:
             self.face_attributes = []
             self.face_index = 0
