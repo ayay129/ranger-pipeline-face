@@ -237,3 +237,18 @@ python code/test_attributes.py
 ## 许可
 
 根据你使用的上游模型与代码许可选择合适的开源协议（如 Apache-2.0/MIT 等）；如已有明确许可，请在此处补充，并在 Hugging Face 模型卡中同步。
+## 昇腾启动
+docker run \
+    --name face \
+    --privileged \
+    --device /dev/davinci0 \
+    --device /dev/davinci_manager \
+    --device /dev/hisi_hdc \
+    -v /usr/local/dcmi:/usr/local/dcmi \
+    -v /usr/local/bin/npu-smi:/usr/local/bin/npu-smi \
+    -v /usr/local/Ascend/driver/lib64/:/usr/local/Ascend/driver/lib64/ \
+    -v /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info \
+    -v /etc/ascend_install.info:/etc/ascend_install.info \
+    -w /app \
+    -p 8000:8000 \
+    -d {image:version}
