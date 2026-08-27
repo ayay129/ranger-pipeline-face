@@ -18,7 +18,7 @@ ENV FACE_OM_DIR=/app/models/buffalo_l INFERENCE_BACKEND=ascend
 ENV PYTHONUNBUFFERED=1
 
 RUN pip config set global.index-url https://repo.huaweicloud.com/repository/pypi/simple && \
-    pip --no-cache-dir install -r /app/code/requirements.Ascend950PR.txt && \
+    pip --no-cache-dir install -r /app/requirements.Ascend950PR.txt && \
     pip --no-cache-dir install -r /app/ascend_patchs/common/*.whl
 
 WORKDIR /app/code
