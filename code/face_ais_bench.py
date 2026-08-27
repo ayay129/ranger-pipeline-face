@@ -1,4 +1,5 @@
 from ais_bench.infer.interface import InferSession
+import acl
 import time
 import os
 import logging
@@ -16,7 +17,16 @@ class FaceModelAISBench:
         self.face_attributes = []
         self.face_index = 0
         self.device_id = int(os.environ.get("ASCEND_DEVICE_ID", "0"))
-        base_dir = models_dir or os.environ.get("FACE_OM_DIR") or os.path.join(os.path.dirname(os.path.dirname(__file__)), "models")
+        models_root = models_dir or os.environ.get("FACE_OM_DIR") or os.path.join(
+            os.path.dirname(os.path.dirname(__file__)), "models", "buffalo_l"
+        )
+        self.soc_name = acl.get_soc_name()
+        if not self.soc_name:
+            raise RuntimeError("acl.get_soc_name() failed")
+        base_dir = os.path.join(models_root, self.soc_name)
+        if not os.path.isdir(base_dir):
+            raise FileNotFoundError(f"Ascend models directory not found for {self.soc_name}: {base_dir}")
+        logger.info("Ascend SoC: %s, models dir: %s", self.soc_name, base_dir)
         self.det_sess = self._try_load(base_dir, ["det_10g.om", "det.om"])
         self.kps_sess = self._try_load(base_dir, ["2d106det.om", "kps.om"])
         self.rec_sess = self._try_load(base_dir, ["w600k_r50.om", "rec.om"])
@@ -66,21 +76,20 @@ class FaceModelAISBench:
         return outs
 
     def _try_load(self, base_dir: str, names: List[str]):
-        paths = []
-        for root, _, files in os.walk(base_dir):
-            for n in names:
-                if n in files:
-                    paths.append(os.path.join(root, n))
-        if not paths:
+        path = next(
+            (os.path.join(base_dir, name) for name in names if os.path.isfile(os.path.join(base_dir, name))),
+            None,
+        )
+        if path is None:
             return None
         try:
-            sess = InferSession(self.device_id, paths[0])
+            sess = InferSession(self.device_id, path)
             try:
                 in_shape = sess.get_inputs()[0].shape
                 out_shape = sess.get_outputs()[0].shape
-                logger.info("AISBench loaded %s input=%s output=%s", os.path.basename(paths[0]), in_shape, out_shape)
+                logger.info("AISBench loaded %s input=%s output=%s", os.path.basename(path), in_shape, out_shape)
             except Exception:
-                logger.info("AISBench loaded %s", os.path.basename(paths[0]))
+                logger.info("AISBench loaded %s", os.path.basename(path))
             return sess
         except Exception:
             return None

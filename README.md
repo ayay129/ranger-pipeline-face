@@ -10,14 +10,17 @@
 │   ├── face_model.py         # 使用 InsightFace 的模型封装
 │   ├── face_model_cpu.py     # 使用 InsightFace 的CPU/GPU配置示例
 │   ├── test_attributes.py    # 属性识别测试脚本
-│   └── requirements.txt      # 运行依赖
+│   ├── requirements.txt      # NVIDIA 运行依赖
+│   └── requirements.Ascend950PR.txt # 昇腾运行依赖
 ├── models/
-│   └── buffalo_l/            # 本地ONNX模型（若走离线/自定义加载）
+│   └── buffalo_l/
+│       ├── onnx/             # NVIDIA/CPU 使用的 ONNX 模型
+│       └── Ascend950PR_9579/ # 与 acl.get_soc_name() 返回值同名的 OM 模型目录
 ├── algo-cv-pipeline-face-buffalo-l/
 │   ├── buffalo_l/            # 同步到 Hugging Face 的ONNX模型包（本地副本）
 │   └── README.md             # 模型卡（说明与用法）
-├── Dockerfile                # 基础镜像构建
-├── Dockerfile.cuda.py310     # CUDA/ONNXRuntime GPU 构建（示例）
+├── Dockerfile.cuda           # NVIDIA CUDA/ONNXRuntime GPU 镜像
+├── Dockerfile.Ascend950PR    # 昇腾 950PR/AISBench 镜像
 └── .gitignore                # 忽略大模型文件等
 ```
 
@@ -101,7 +104,7 @@ from pathlib import Path
 from huggingface_hub import hf_hub_download
 
 REPO_ID = "<你的用户名>/algo-cv-pipeline-face-buffalo-l"
-LOCAL_DIR = Path("models") / "buffalo_l"
+LOCAL_DIR = Path("models") / "buffalo_l" / "onnx"
 LOCAL_DIR.mkdir(parents=True, exist_ok=True)
 
 for fname in [
@@ -130,7 +133,7 @@ hf repo create <你的用户名>/algo-cv-pipeline-face-buffalo-l --repo-type mod
 hf upload \
   --repo-id <你的用户名>/algo-cv-pipeline-face-buffalo-l \
   --repo-type model \
-  models/buffalo_l \
+  models/buffalo_l/onnx \
   --include "**/*.onnx" \
   --commit-message "Add buffalo_l ONNX models"
 ```
@@ -144,7 +147,7 @@ hf upload \
 git init
 mkdir -p models && touch models/.gitkeep
 
-git add code Dockerfile Dockerfile.cuda.py310 .gitignore models/.gitkeep
+git add code Dockerfile.cuda Dockerfile.Ascend950PR .gitignore models/.gitkeep
 git commit -m "Initial commit: code, requirements, dockerfiles"
 
 git branch -M main
@@ -157,17 +160,30 @@ git push -u origin main
 NVIDIA CUDA 镜像构建：
 
 ```bash
-docker build -t algo-cv-face:cuda -f Dockerfile .
+docker build -t algo-cv-face:cuda -f Dockerfile.cuda .
 docker run --rm --gpus all -p 8112:8000 algo-cv-face:cuda
 ```
 
-确保宿主机有合适的 NVIDIA 驱动与 Docker GPU 运行时。`Dockerfile.cuda.py310` 仅保留为 CUDA/Python
-基础镜像示例。
+确保宿主机有合适的 NVIDIA 驱动与 Docker GPU 运行时。
+
+昇腾 950PR 镜像使用独立依赖和 OM 推理后端：
+
+```bash
+docker build -t algo-cv-face:ascend950pr -f Dockerfile.Ascend950PR .
+```
+
+通过 `INFERENCE_BACKEND=onnx` 或 `INFERENCE_BACKEND=ascend` 选择推理后端，启动时只导入对应实现。
+Ascend 后端通过 `acl.get_soc_name()` 获取芯片名，并从 `models/buffalo_l/<芯片名>/` 加载 OM 模型。
+转换模型时令 `SOC_VERSION` 与目标目录名一致，例如：
+
+```bash
+SOC_VERSION=Ascend950PR_9579 ./scripts/convert_buffalo_l_om.sh
+```
 
 ### NVIDIA CUDA 推理配置
 
-当前 `Dockerfile` 使用 CUDA 12 + cuDNN 9，对应 `onnxruntime-gpu==1.20.1`。不要在同一个镜像里混用
-`onnxruntime-gpu==1.16.x` 和 cuDNN 9；1.16.x 属于 CUDA 11.8/cuDNN 8 组合。
+NVIDIA 部署请使用根目录的 `Dockerfile.cuda`。它使用 CUDA 11.8 + cuDNN 8，对应
+`onnxruntime-gpu==1.16.3`。
 
 检测模型在部分 NVIDIA 环境中可能触发 ONNX Runtime 生成的 `FusedConv` CUDA kernel 报
 `CUDNN_STATUS_EXECUTION_FAILED`。默认配置已采用更稳的 CUDA Provider 设置：

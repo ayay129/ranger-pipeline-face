@@ -1,0 +1,26 @@
+FROM swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-950-ubuntu22.04-py3.12
+RUN sed -i 's@http://archive.ubuntu.com/ubuntu/@https://repo.huaweicloud.com/ubuntu/@g' /etc/apt/sources.list && \
+    sed -i 's@http://security.ubuntu.com/ubuntu/@https://repo.huaweicloud.com/ubuntu/@g' /etc/apt/sources.list && \
+     apt-get update && \
+     apt-get install -y libglib2.0-0 libgomp1 && \
+     apt-get install -y \
+        python3.10 \
+        python3.10-dev \
+        python3.10-venv \
+        python3-pip && \
+        /usr/bin/python3.10 -m venv /opt/py310 && \
+        rm -rf /var/lib/apt/lists/*
+ENV PATH="/opt/py310/bin:$PATH"
+COPY /code /app
+WORKDIR /app
+# 拷贝编译好的模型文件
+# COPY models /app/models
+ENV FACE_OM_DIR=/app/models/buffalo_l
+ENV PYTHONUNBUFFERED=1
+
+RUN pip config set global.index-url https://repo.huaweicloud.com/repository/pypi/simple && \
+    pip --no-cache-dir install -r /app/code/requirements.Ascend950PR.txt && \
+    pip --no-cache-dir install -r /app/ascend_patchs/common/*.whl
+
+EXPOSE 8000
+CMD ["python3", "face_fastapi.py", "--host", "0.0.0.0", "--port", "8000"]

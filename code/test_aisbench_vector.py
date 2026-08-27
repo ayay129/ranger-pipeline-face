@@ -26,7 +26,7 @@ def _set_default_env():
 def main():
     parser = argparse.ArgumentParser(description="AISBench vector sanity check")
     parser.add_argument("--image", default="test.png", help="image path (default: test.png)")
-    parser.add_argument("--models-dir", default=None, help="OM models directory")
+    parser.add_argument("--models-dir", default=None, help="models root containing per-SoC directories")
     parser.add_argument("--save-emb", default=None, help="optional npy output path")
     args = parser.parse_args()
 

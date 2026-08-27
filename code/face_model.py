@@ -53,7 +53,9 @@ class FaceModelONNX:
         env_dir = os.environ.get("FACE_ONNX_DIR")
         if env_dir:
             return Path(env_dir)
-        return Path(__file__).resolve().parent.parent / "models" / "buffalo_l"
+        models_root = Path(__file__).resolve().parent.parent / "models" / "buffalo_l"
+        onnx_dir = models_root / "onnx"
+        return onnx_dir if onnx_dir.is_dir() else models_root
 
     def _resolve_providers(self, providers: List[str]):
         if providers:

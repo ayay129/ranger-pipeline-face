@@ -12,15 +12,6 @@ from fastapi import FastAPI, File, UploadFile, Form, Request
 from fastapi.responses import JSONResponse, HTMLResponse
 import uvicorn
 import logging 
-from face_model import FaceModelONNX
-
-try:
-    from face_ais_bench import FaceModelAISBench
-except Exception as exc:
-    FaceModelAISBench = None
-    AIS_BENCH_IMPORT_ERROR = exc
-else:
-    AIS_BENCH_IMPORT_ERROR = None
 
 # Configure logging
 logging.basicConfig(
@@ -38,30 +29,28 @@ app = FastAPI(
 
 # Initialize face model implementation
 model = None
-model_type=os.environ.get("MODEL_TYPE", "onnx")
+backend = os.environ.get("INFERENCE_BACKEND", "onnx").lower()
 
 @app.on_event("startup")
 async def startup_event():
     """Initialize the model on startup"""
     global model
     try:
-        logger.info("Model type: %s", model_type)
-        if model_type=="om":
-            if FaceModelAISBench is None:
-                raise RuntimeError(f"ais_bench is not available: {AIS_BENCH_IMPORT_ERROR}")
+        logger.info("Inference backend: %s", backend)
+        if backend == "ascend":
+            from face_ais_bench import FaceModelAISBench
+
             model = FaceModelAISBench()
-        else:
+        elif backend == "onnx":
+            from face_model import FaceModelONNX
+
             model = FaceModelONNX()
-        #model = FaceModel()
+        else:
+            raise ValueError(f"Unsupported INFERENCE_BACKEND: {backend}; expected onnx or ascend")
         logger.info(f"Finish loading face model. model type:{model}")
-    except Exception as e:
-        logger.error(f"Failed to initialize model: {e}")
-        print("\n" + "="*60)
-        print(f"ERROR: Failed to initialize face model: {e}")
-        print("Please check your model dependencies.")
-        print("You may need to install additional dependencies:")
-        print("pip install onnxruntime-gpu")
-        print("="*60 + "\n")
+    except Exception:
+        logger.exception("Failed to initialize model for INFERENCE_BACKEND=%s", backend)
+        raise
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -274,7 +263,7 @@ def get_metrics():
     return {
         "version": "1.0",
         "framework": "FastAPI",
-        "engine": "onnx/om",
+        "engine": backend,
         "implementation": "local-models",
         "timestamp": time.time()
     }

@@ -22,7 +22,6 @@ RUN python3 -m pip install --upgrade pip setuptools wheel && \
     python3 -m pip show onnxruntime-gpu
 
 ENV PYTHONUNBUFFERED=1
-ENV FACE_ONNX_DIR=/models/buffalo_l
 ENV ORT_GRAPH_OPT_LEVEL=ORT_ENABLE_BASIC
 ENV ORT_CUDNN_CONV_ALGO_SEARCH=DEFAULT
 ENV ORT_CUDNN_CONV_USE_MAX_WORKSPACE=0

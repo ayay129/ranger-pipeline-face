@@ -4,13 +4,17 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODELS_DIR="${MODELS_DIR:-$ROOT_DIR/models/buffalo_l}"
 SOC_VERSION="${SOC_VERSION:-Ascend310P3}"
+ONNX_DIR="${ONNX_DIR:-$MODELS_DIR/onnx}"
+OM_DIR="${OM_DIR:-$MODELS_DIR/$SOC_VERSION}"
 BATCH="${BATCH:-1}"
 DET_INPUT_SHAPE="${DET_INPUT_SHAPE:-640,640}"
 
-if [[ ! -d "$MODELS_DIR" ]]; then
-  echo "models dir not found: $MODELS_DIR"
+if [[ ! -d "$ONNX_DIR" ]]; then
+  echo "ONNX models dir not found: $ONNX_DIR"
   exit 1
 fi
+
+mkdir -p "$OM_DIR"
 
 if ! command -v atc >/dev/null 2>&1; then
   echo "atc not found in PATH. please source CANN set_env.sh first."
@@ -34,12 +38,14 @@ run_atc() {
 
 echo "Using MODELS_DIR=$MODELS_DIR"
 echo "Using SOC_VERSION=$SOC_VERSION"
+echo "Using ONNX_DIR=$ONNX_DIR"
+echo "Using OM_DIR=$OM_DIR"
 echo "Using DET_INPUT_SHAPE=$DET_INPUT_SHAPE"
 echo "Using BATCH=$BATCH"
 
-run_atc "$MODELS_DIR/det_10g.onnx" "$MODELS_DIR/det_10g" "input.1" "${BATCH},3,${DET_H},${DET_W}"
-run_atc "$MODELS_DIR/2d106det.onnx" "$MODELS_DIR/2d106det" "data" "${BATCH},3,192,192"
-run_atc "$MODELS_DIR/w600k_r50.onnx" "$MODELS_DIR/w600k_r50" "input.1" "${BATCH},3,112,112"
-run_atc "$MODELS_DIR/genderage.onnx" "$MODELS_DIR/genderage" "data" "${BATCH},3,96,96"
+run_atc "$ONNX_DIR/det_10g.onnx" "$OM_DIR/det_10g" "input.1" "${BATCH},3,${DET_H},${DET_W}"
+run_atc "$ONNX_DIR/2d106det.onnx" "$OM_DIR/2d106det" "data" "${BATCH},3,192,192"
+run_atc "$ONNX_DIR/w600k_r50.onnx" "$OM_DIR/w600k_r50" "input.1" "${BATCH},3,112,112"
+run_atc "$ONNX_DIR/genderage.onnx" "$OM_DIR/genderage" "data" "${BATCH},3,96,96"
 
 echo "done"
