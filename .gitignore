@@ -5,5 +5,4 @@ models/**
 !models/.gitkeep
 test/
 reports/
-*.jpeg
 algo-cv-pipeline-face-buffalo-l
